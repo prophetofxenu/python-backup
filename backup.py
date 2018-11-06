@@ -1,67 +1,57 @@
-#TODO add file ignoring with regex
+#TODO check to make sure conf is valid
 #TODO use modification time as alternative to md5
 #TODO ask for confirmation for type of backup
 #TODO add commandline arguments
 #TODO report stats after completion
 #TODO better conf generation
 #TODO add eval() conditions for running types of backups
+#TODO add logging
 
 import datetime
 import hashlib
 import os
+import re
 from shutil import copy2 as copy, rmtree, make_archive
 import toml
 
 conf_path: str = "./conf.toml"
 hash_path: str = "./hashes.toml"
 
-hash_record: dict = {}
-
-def gen_config(path: str):
-    if os.path.exists(path):
-        return
-    conf: dict = {}
-    conf["source-directories"]: list = []
-    conf["destination"]: str = ""
-    conf["differential-backups"] = 6
-    conf["current-differential-backups"] = 0
-    conf["last-full"]: str = "never"
-    conf["last-full-timestamp"]: float = 0.0
-    conf["last-differential"]: str = "never"
-    conf["last-differential-timestamp"]: float = 0.0
-    conf["ignore-patterns"]: list = []
-    return conf
-
 def gen_config_file(path: str):
     if os.path.exists(path):
         return
-    conf_file: str = """
-    # This is the config file for backup.py
-    # Formatting is TOML: https://github.com/toml-lang/toml
+    conf_file: str = """# This is the config file for backup.py
+# Formatting is TOML: https://github.com/toml-lang/toml
 
-    # Add all source directories to backup.
-    source-directories = []
+# Add all source directories to backup.
+source-directories = [
 
-    # Add destination at which to store backups
-    destination = ""
+]
 
-    # Set total number of differential backups to perform before the next full backup
-    differential-backups = 6
+# Add destination at which to store backups
+destination = ""
 
-    
-    # The below entries are for internal use by the program, and should typically not be altered
+# Regular expressions to test items against. If a match occurs, the file will be ignored. Remember to properly escape special characters.
+ignored = [
 
-    # The number of differential backups that have been performed since the last full backup
-    current-differential-backups = 0
+]
 
-    # The date of the last full backup. Only the timestamp is actually used by the program
-    last-full = "never"
-    last-full-timestamp = 0.0
+# Set total number of differential backups to perform before the next full backup
+differential-backups = 6
 
-    # The date of the last differential backup. Only the timestamp is actually used by the program
-    last-differential = "never"
-    last-differential-timestamp = 0.0
-    """
+
+# The below entries are for internal use by the program, and should typically not be altered
+
+# The number of differential backups that have been performed since the last full backup
+current-differential-backups = 0
+
+# The date of the last full backup. Only the timestamp is actually used by the program
+last-full = "never"
+last-full-timestamp = 0.0
+
+# The date of the last differential backup. Only the timestamp is actually used by the program
+last-differential = "never"
+last-differential-timestamp = 0.0"""
     with open(path, "w") as f:
         f.write(conf_file)
     return toml.loads(conf_file)
@@ -76,6 +66,12 @@ def item_from_path(path: str):
         return path.split("/")[-2]
     return path.split("/")[-1]
 
+def is_ignored(conf: dict, item: str):
+    for pattern in conf["ignored"]:
+        if bool(re.match(pattern, item)):
+            return True
+    return False
+
 def full_backup(conf: dict):
     working_dir: str = os.path.abspath(os.curdir)
     now: str = datetime.datetime.now().strftime("%m-%d-%Y_%a_%H:%M:%S")
@@ -83,6 +79,7 @@ def full_backup(conf: dict):
     try:
         os.mkdir(conf["destination"] + "_Full_" + now)
     except FileExistsError:
+        #TODO: ask for confirmation
         rmtree(conf["destination"] + "_Full_" + now)
         os.mkdir(conf["destination"] + "_Full_" + now)
     for path in conf["source-directories"]:
@@ -110,6 +107,7 @@ def differential_backup(conf: dict):
     try:
         os.mkdir(conf["destination"] + "_Differential_" + now)
     except FileExistsError:
+        #TODO: ask for confirmation
         rmtree(conf["destination"] + "_Differential_" + now)
         os.mkdir(conf["destination"] + "_Differential_" + now)
     for path in conf["source-directories"]:
@@ -133,6 +131,9 @@ def backup_dir(full_backup: bool, path: str, destination: str, hash_record: dict
     previous_path: str = os.path.abspath(os.curdir)
     os.chdir(path)
     for item in os.listdir():
+        if is_ignored(conf, item):
+            print("Skipping " + item)
+            continue
         item_path: str = os.path.abspath(path + "/" + item)
         item_destination_path: str = os.path.abspath(destination + "/" + item)
         if os.path.isdir(item_path):
