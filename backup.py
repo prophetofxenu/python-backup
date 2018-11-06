@@ -1,4 +1,3 @@
-#TODO check to make sure conf is valid
 #TODO use modification time as alternative to md5
 #TODO ask for confirmation for type of backup
 #TODO add commandline arguments
@@ -55,6 +54,32 @@ last-differential-timestamp = 0.0"""
     with open(path, "w") as f:
         f.write(conf_file)
     return toml.loads(conf_file)
+
+def verify_conf(conf: dict):
+    valid: bool = True
+    keys: set = conf.keys()
+    if "source-directories" not in keys or not isinstance(conf["source-directories"], list) or len(conf["source-directories"]) == 0:
+        print("Invalid source-directories entry in " + conf_path)
+        valid = False
+    if "destination" not in keys or len(conf["destination"]) == 0:
+        print("Invalid destination entry in " + conf_path)
+        valid = False
+    if "ignored" not in keys or not isinstance(conf["ignored"], list) or len(conf["ignored"]) == 0:
+        print("Invalid ignored entry in " + conf_path)
+        valid = False
+    if "differential-backups" not in keys or conf["differential-backups"] < 0:
+        print("Invalid differential-backups entry in " + conf_path)
+        valid = False
+    if "current-differential-backups" not in keys or conf["current-differential-backups"] < 0:
+        print("Invalid current-differential-backups entry in " + conf_path)
+        valid = False
+    if "last-full-timestamp" not in keys:
+        print("Invalid last-full-timestamp entry in " + conf_path)
+        valid = False
+    if "last-differential-timestamp" not in keys:
+        print("Invalid last-differential-timestamp entry in " + conf_path)
+        valid = False
+    return valid
 
 def write_toml(conf: dict, path: str):
     output = open(path, "w")
@@ -183,6 +208,8 @@ if __name__ == "__main__":
         print("config file created at %s. Please edit it before running this program again." %os.path.abspath(conf_path))
     else:
         conf: dict = toml.load(conf_path)
+        if not verify_conf(conf):
+            exit(1)
         if conf["last-full-timestamp"] == 0.0 or conf["current-differential-backups"] >= conf["differential-backups"]:
             full_backup(conf)
             conf["current-differential-backups"] = 0
