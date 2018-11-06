@@ -61,6 +61,26 @@ def write_toml(conf: dict, path: str):
     toml.dump(conf, output)
     output.close()
 
+def confirm(question: str, default_yes: bool=True, default_no: bool=False):
+    if default_yes:
+        response: str = input(question + " (Y/n)")
+    elif default_no:
+        response: str = input(question + " (y/N)")
+    else:
+        response: str = input(question + " (y/n)")
+    if response == "":
+        if default_yes:
+            return True
+        if default_no:
+            return False
+    response = response.lower()
+    if response == "y":
+        return True
+    if response == "n":
+        return False
+    print("Invalid response")
+    return confirm(question, default_yes, default_no)
+
 def item_from_path(path: str):
     if path[-1] == '/':
         return path.split("/")[-2]
@@ -76,26 +96,29 @@ def full_backup(conf: dict):
     working_dir: str = os.path.abspath(os.curdir)
     now: str = datetime.datetime.now().strftime("%m-%d-%Y_%a_%H:%M:%S")
     hash_record: dict = {}
+    destination_path: str = conf["destination"] + "_Full_" + now
     try:
-        os.mkdir(conf["destination"] + "_Full_" + now)
+        os.mkdir(destination_path)
     except FileExistsError:
-        #TODO: ask for confirmation
-        rmtree(conf["destination"] + "_Full_" + now)
-        os.mkdir(conf["destination"] + "_Full_" + now)
+        if confirm("The destination folder already exists at %s. Remove?" %destination_path, False, True): 
+            rmtree(destination_path)
+            os.mkdir(destination_path)
+        else:
+            exit(1)
     for path in conf["source-directories"]:
-        os.mkdir(conf["destination"] + "_Full_" + now + "/" + item_from_path(path))
-        backup_dir(True, path, conf["destination"] + "_Full_" + now + "/" + item_from_path(path), hash_record)
-    os.chdir(conf["destination"] + "_Full_" + now)
+        os.mkdir(destination_path + "/" + item_from_path(path))
+        backup_dir(True, path, destination_path + "/" + item_from_path(path), hash_record)
+    os.chdir(destination_path)
     try:
         print("Finished copying files. Archiving...")
-        make_archive("Full_" + now, "zip", conf["destination"] + "_Full_" + now)
+        make_archive("Full_" + now, "zip", destination_path)
     except ValueError as e:
         print("An error occured during creation of the archive. This may be okay, however.")
         print(str(e))
     print("Finished archiving. Removing working files...")
-    for file in os.listdir(conf["destination"] + "_Full_" + now):
+    for file in os.listdir(destination_path):
         if os.path.isdir(file):
-            rmtree(conf["destination"] + "_Full_" + now + "/" + file)
+            rmtree(destination_path + "/" + file)
     print("Full backup completed")
     os.chdir(working_dir)
     write_toml(hash_record, hash_path)
@@ -104,26 +127,29 @@ def differential_backup(conf: dict):
     working_dir: str = os.path.abspath(os.curdir)
     now: str = datetime.datetime.now().strftime("%m-%d-%Y_%a_%H:%M:%S")
     hash_record: dict = toml.load(hash_path)
+    destination_path: str = conf["destination"] + "_Differential_" + now
     try:
-        os.mkdir(conf["destination"] + "_Differential_" + now)
+        os.mkdir(destination_path)
     except FileExistsError:
-        #TODO: ask for confirmation
-        rmtree(conf["destination"] + "_Differential_" + now)
-        os.mkdir(conf["destination"] + "_Differential_" + now)
+        if confirm("The destination folder already exists at %s. Remove?" %destination_path, False, True): 
+            rmtree(destination_path)
+            os.mkdir(destination_path)
+        else:
+            exit(1)
     for path in conf["source-directories"]:
-        os.mkdir(conf["destination"] + "_Differential_" + now + "/" + item_from_path(path))
-        backup_dir(False, path, conf["destination"] + "_Differential_" + now + "/" + item_from_path(path), hash_record)
-    os.chdir(conf["destination"] + "_Differential_" + now)
+        os.mkdir(destination_path + "/" + item_from_path(path))
+        backup_dir(False, path, destination_path + "/" + item_from_path(path), hash_record)
+    os.chdir(destination_path)
     try:
         print("Finished copying files. Archiving...")
-        make_archive("Differential_" + now, "zip", conf["destination"] + "_Differential_" + now)
+        make_archive("Differential_" + now, "zip", destination_path)
     except ValueError as e:
         print("An error occured during creation of the archive. This may be okay, however.")
         print(str(e))
     print("Finished archiving. Removing working files...")
-    for file in os.listdir(conf["destination"] + "_Differential_" + now):
+    for file in os.listdir(destination_path):
         if os.path.isdir(file):
-            rmtree(conf["destination"] + "_Differential_" + now + "/" + file)
+            rmtree(destination_path + "/" + file)
     print("Differential backup completed")
     os.chdir(working_dir)
     
