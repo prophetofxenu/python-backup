@@ -1,10 +1,13 @@
-#TODO use modification time as alternative to md5
 #TODO ask for confirmation for type of backup
 #TODO add commandline arguments
 #TODO report stats after completion
 #TODO better conf generation
 #TODO add eval() conditions for running types of backups
 #TODO add logging
+#TODO remove old backups
+#TODO add incremental backups
+#TODO verify that type of record stored is correct type (md5 or mtime)
+#TODO fix comments in conf being deleted
 
 import datetime
 import hashlib
@@ -14,7 +17,7 @@ from shutil import copy2 as copy, rmtree, make_archive
 import toml
 
 conf_path: str = "./conf.toml"
-hash_path: str = "./hashes.toml"
+records_path: str = "./records.toml"
 
 def gen_config_file(path: str):
     if os.path.exists(path):
@@ -37,6 +40,9 @@ ignored = [
 
 # Set total number of differential backups to perform before the next full backup
 differential-backups = 6
+
+# Use MD5 hashing instead of mtime to check if a file has been changed. MD5 is more accurate, but heavily increases the amount of time that the backup takes.
+use-md5 = false
 
 
 # The below entries are for internal use by the program, and should typically not be altered
@@ -64,7 +70,7 @@ def verify_conf(conf: dict):
     if "destination" not in keys or len(conf["destination"]) == 0:
         print("Invalid destination entry in " + conf_path)
         valid = False
-    if "ignored" not in keys or not isinstance(conf["ignored"], list) or len(conf["ignored"]) == 0:
+    if "ignored" not in keys or not isinstance(conf["ignored"], list):
         print("Invalid ignored entry in " + conf_path)
         valid = False
     if "differential-backups" not in keys or conf["differential-backups"] < 0:
@@ -120,7 +126,7 @@ def is_ignored(conf: dict, item: str):
 def full_backup(conf: dict):
     working_dir: str = os.path.abspath(os.curdir)
     now: str = datetime.datetime.now().strftime("%m-%d-%Y_%a_%H:%M:%S")
-    hash_record: dict = {}
+    records: dict = {}
     destination_path: str = conf["destination"] + "_Full_" + now
     try:
         os.mkdir(destination_path)
@@ -132,7 +138,7 @@ def full_backup(conf: dict):
             exit(1)
     for path in conf["source-directories"]:
         os.mkdir(destination_path + "/" + item_from_path(path))
-        backup_dir(True, path, destination_path + "/" + item_from_path(path), hash_record)
+        backup_dir(True, path, destination_path + "/" + item_from_path(path), records, conf["use-md5"])
     os.chdir(destination_path)
     try:
         print("Finished copying files. Archiving...")
@@ -146,12 +152,12 @@ def full_backup(conf: dict):
             rmtree(destination_path + "/" + file)
     print("Full backup completed")
     os.chdir(working_dir)
-    write_toml(hash_record, hash_path)
+    write_toml(records, records_path)
 
 def differential_backup(conf: dict):
     working_dir: str = os.path.abspath(os.curdir)
     now: str = datetime.datetime.now().strftime("%m-%d-%Y_%a_%H:%M:%S")
-    hash_record: dict = toml.load(hash_path)
+    records: dict = toml.load(records_path)
     destination_path: str = conf["destination"] + "_Differential_" + now
     try:
         os.mkdir(destination_path)
@@ -163,7 +169,7 @@ def differential_backup(conf: dict):
             exit(1)
     for path in conf["source-directories"]:
         os.mkdir(destination_path + "/" + item_from_path(path))
-        backup_dir(False, path, destination_path + "/" + item_from_path(path), hash_record)
+        backup_dir(False, path, destination_path + "/" + item_from_path(path), records, conf["use-md5"])
     os.chdir(destination_path)
     try:
         print("Finished copying files. Archiving...")
@@ -178,7 +184,7 @@ def differential_backup(conf: dict):
     print("Differential backup completed")
     os.chdir(working_dir)
     
-def backup_dir(full_backup: bool, path: str, destination: str, hash_record: dict):
+def backup_dir(full_backup: bool, path: str, destination: str, records: dict, use_md5: bool):
     previous_path: str = os.path.abspath(os.curdir)
     os.chdir(path)
     for item in os.listdir():
@@ -189,15 +195,18 @@ def backup_dir(full_backup: bool, path: str, destination: str, hash_record: dict
         item_destination_path: str = os.path.abspath(destination + "/" + item)
         if os.path.isdir(item_path):
             os.mkdir(item_destination_path)
-            backup_dir(full_backup, item_path, item_destination_path, hash_record)
+            backup_dir(full_backup, item_path, item_destination_path, records, use_md5)
             if not full_backup and len(os.listdir(item_destination_path)) == 0: #delete the directory if nothing was backed up
                 os.rmdir(item_destination_path)
         else:
             print("Checking file " + item_path)
-            checksum: str = hashlib.md5(open(item_path, "rb").read()).hexdigest()
-            if full_backup or (item_path not in hash_record.keys() or hash_record[item_path] != checksum):
+            if use_md5:
+                compare: str = hashlib.md5(open(item_path, "rb").read()).hexdigest()
+            else:
+                compare: str = str(os.path.getmtime(item_path))
+            if full_backup or (item_path not in records.keys() or records[item_path] != compare):
                 if full_backup:
-                    hash_record[item_path] = checksum
+                    records[item_path] = compare
                 print(item_path + " added to backup")
                 copy(item_path, item_destination_path)
     os.chdir(previous_path)
