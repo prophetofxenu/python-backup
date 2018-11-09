@@ -220,12 +220,33 @@ if __name__ == "__main__":
         if not verify_conf(conf):
             exit(1)
         if conf["last-full-timestamp"] == 0.0 or conf["current-differential-backups"] >= conf["differential-backups"]:
+            backup_type: int = 0
+        else:
+            backup_type: int = 1
+        if backup_type == 0:
+            response: bool = confirm("The next backup is set to be a full backup. Proceed?")
+            if not response:
+                if confirm("Perform a differential backup instead?", default_yes=False, default_no=True):
+                    backup_type = 1
+                else:
+                    exit(0)
+        else:
+            response: bool = confirm("The next backup is set to be a differential backup. Proceed?")
+            if not response:
+                if confirm("Perform a full backup instead?", default_yes=False, default_no=True):
+                    backup_type = 0
+                else:
+                    exit(0)
+        if backup_type == 0:
             full_backup(conf)
             conf["current-differential-backups"] = 0
             now: datetime = datetime.datetime.now()
             conf["last-full"] = now.strftime("%m/%d/%Y %a %H:%M:%S")
             conf["last-full-timestamp"] = now.timestamp()
         else:
+            if not os.path.exists(records_path):
+                print("Error: record file not found. Has a full backup been run yet?")
+                exit(1)
             differential_backup(conf)
             conf["current-differential-backups"] += 1
             now: datetime = datetime.datetime.now()
