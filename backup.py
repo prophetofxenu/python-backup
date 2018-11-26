@@ -1,13 +1,9 @@
-#TODO ask for confirmation for type of backup
-#TODO add commandline arguments
-#TODO report stats after completion
-#TODO better conf generation
+#TODO verify that type of record stored is correct type (md5 or mtime)
 #TODO add eval() conditions for running types of backups
 #TODO add logging
 #TODO remove old backups
-#TODO add incremental backups
-#TODO verify that type of record stored is correct type (md5 or mtime)
 #TODO fix comments in conf being deleted
+#TODO add commandline arguments
 
 import datetime
 import hashlib
@@ -15,6 +11,7 @@ import os
 import re
 from shutil import copy2 as copy, rmtree, make_archive
 import toml
+from zipfile import ZipFile
 
 conf_path: str = "./conf.toml"
 records_path: str = "./records.toml"
@@ -117,6 +114,17 @@ def item_from_path(path: str):
         return path.split("/")[-2]
     return path.split("/")[-1]
 
+def item_size(path: str):
+    size: float = float(os.stat(path).st_size)
+    if size // 1000 < 1:
+        return str(size) + "B"
+    if size // 1000000 < 1:
+        return str(size / 1000) + "KB"
+    if size // 1000000000 < 1:
+        return str(size / 1000000) + "MB"
+    if size // 1000000000000 < 1:
+        return str(size / 100000000) + "GB"
+
 def is_ignored(conf: dict, item: str):
     for pattern in conf["ignored"]:
         if bool(re.match(pattern, item)):
@@ -150,6 +158,8 @@ def full_backup(conf: dict):
     for file in os.listdir(destination_path):
         if os.path.isdir(file):
             rmtree(destination_path + "/" + file)
+    with ZipFile("Full_" + now + ".zip") as z:
+        print("Full backup completed. Backed up %d items with a compressed size of %s." %(len(z.infolist()), item_size(destination_path + "/Full_" + now + ".zip")))
     print("Full backup completed")
     os.chdir(working_dir)
     write_toml(records, records_path)
@@ -181,7 +191,8 @@ def differential_backup(conf: dict):
     for file in os.listdir(destination_path):
         if os.path.isdir(file):
             rmtree(destination_path + "/" + file)
-    print("Differential backup completed")
+    with ZipFile("Differential_" + now + ".zip") as z:
+        print("Differential backup completed. Backed up %d items with a compressed size of %s." %(len(z.infolist()), item_size(destination_path + "/Differential_" + now + ".zip")))
     os.chdir(working_dir)
     
 def backup_dir(full_backup: bool, path: str, destination: str, records: dict, use_md5: bool):
