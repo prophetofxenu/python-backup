@@ -82,6 +82,20 @@ def verify_conf(conf: dict):
     if "last-differential-timestamp" not in keys:
         print("Invalid last-differential-timestamp entry in " + conf_path)
         valid = False
+    if "use-md5" not in keys:
+        print("use-md5 key missing from config")
+        valid = False
+    else:
+        if os.path.exists(records_path):
+            records: dict = toml.load(records_path)
+            if conf["use-md5"]:
+                if not bool(re.search("[A-z]", records[list(records.keys())[0]])):
+                    print("config says to use MD5, but record file is storing mtime")
+                    valid = False
+            else:
+                if bool(re.search("[A-z]", records[list(records.keys())[0]])):
+                    print("config says to use mtime, but record file is storing MD5")
+                    valid = False
     return valid
 
 def write_toml(conf: dict, path: str):
