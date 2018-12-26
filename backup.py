@@ -1,20 +1,38 @@
-#TODO verify that type of record stored is correct type (md5 or mtime)
-#TODO add eval() conditions for running types of backups
-#TODO add logging
 #TODO remove old backups
-#TODO fix comments in conf being deleted
 #TODO add commandline arguments
 
 import datetime
 import hashlib
+import logging
 import os
 import re
 from shutil import copy2 as copy, rmtree, make_archive
+import sys
 import toml
 from zipfile import ZipFile
 
 conf_path: str = "./conf.toml"
 records_path: str = "./records.toml"
+tmp_log_path: str = "/tmp/python-backup.log"
+
+init_time: str = datetime.datetime.now().strftime("%m-%d-%Y %a %H-%M-%S")
+log_destination: str = "./logs/" + init_time + ".log"
+
+def init_logger():
+    console = logging.StreamHandler(sys.stdout)
+    console.setLevel(logging.INFO)
+    console.setFormatter(logging.Formatter("%(message)s"))
+    file = logging.FileHandler(tmp_log_path)
+    file.setLevel(logging.DEBUG)
+    file.setFormatter(logging.Formatter("[%(asctime)s %(levelname)s] %(message)s"))
+    logging.basicConfig(handlers=[console, file])
+    global logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+
+def write_log():
+    copy(tmp_log_path, log_destination)
+    os.remove(tmp_log_path)
 
 def gen_config_file(path: str):
     if os.path.exists(path):
@@ -137,7 +155,7 @@ def item_size(path: str):
     if size // 1000000000 < 1:
         return str(size / 1000000) + "MB"
     if size // 1000000000000 < 1:
-        return str(size / 100000000) + "GB"
+        return str(size / 1000000000) + "GB"
 
 def is_ignored(conf: dict, item: str):
     for pattern in conf["ignored"]:
@@ -147,40 +165,48 @@ def is_ignored(conf: dict, item: str):
 
 def full_backup(conf: dict):
     working_dir: str = os.path.abspath(os.curdir)
-    now: str = datetime.datetime.now().strftime("%m-%d-%Y_%a_%H:%M:%S")
+    now: str = datetime.datetime.now().strftime("%m-%d-%Y_%a_%H-%M-%S")
     records: dict = {}
     destination_path: str = conf["destination"] + "_Full_" + now
     try:
+        logger.info("Creating destination path at " + destination_path)
         os.mkdir(destination_path)
     except FileExistsError:
+        logger.warning("Destination path already exists")
         if confirm("The destination folder already exists at %s. Remove?" %destination_path, False, True): 
+            logger.info("User chose to remove the existing directory at destination path, continuing")
             rmtree(destination_path)
             os.mkdir(destination_path)
         else:
+            logger.critical("User chose to leave the existing directory. Program cannot continue")
+            write_log()
             exit(1)
     for path in conf["source-directories"]:
+        logger.info("Creating destination directory for " + path)
         os.mkdir(destination_path + "/" + item_from_path(path))
+        logger.info("Destination created. Backing up " + path)
         backup_dir(True, path, destination_path + "/" + item_from_path(path), records, conf["use-md5"])
     os.chdir(destination_path)
     try:
-        print("Finished copying files. Archiving...")
+        logger.info("Finished copying source directories. Archiving")
         make_archive("Full_" + now, "zip", destination_path)
     except ValueError as e:
-        print("An error occured during creation of the archive. This may be okay, however.")
-        print(str(e))
-    print("Finished archiving. Removing working files...")
+        logger.error("Error occured during creation of archive: " + str(e))
+    logger.info("Archive created. Removing working files")
     for file in os.listdir(destination_path):
         if os.path.isdir(file):
+            logger.debug("Removing " + file)
             rmtree(destination_path + "/" + file)
     with ZipFile("Full_" + now + ".zip") as z:
-        print("Full backup completed. Backed up %d items with a compressed size of %s." %(len(z.infolist()), item_size(destination_path + "/Full_" + now + ".zip")))
-    print("Full backup completed")
+        logger.info("Full backup completed. Backed up %d items with a compressed size of %s" %(len(z.infolist()), item_size(destination_path + "/Full_" + now + ".zip")))
     os.chdir(working_dir)
     write_toml(records, records_path)
+    logger.debug("Record file written to " + records_path)
+    return "%s/%s.log" %(destination_path, now)
 
 def differential_backup(conf: dict):
     working_dir: str = os.path.abspath(os.curdir)
-    now: str = datetime.datetime.now().strftime("%m-%d-%Y_%a_%H:%M:%S")
+    now: str = datetime.datetime.now().strftime("%m-%d-%Y_%a_%H-%M-%S")
     records: dict = toml.load(records_path)
     destination_path: str = conf["destination"] + "_Differential_" + now
     try:
@@ -213,33 +239,44 @@ def backup_dir(full_backup: bool, path: str, destination: str, records: dict, us
     previous_path: str = os.path.abspath(os.curdir)
     os.chdir(path)
     for item in os.listdir():
+        logger.debug("Backing up item " + item)
         if is_ignored(conf, item):
-            print("Skipping " + item)
+            logger.info("Skipping item " + item)
             continue
         item_path: str = os.path.abspath(path + "/" + item)
         item_destination_path: str = os.path.abspath(destination + "/" + item)
         if os.path.isdir(item_path):
+            logger.debug(item + " is a directory, descending")
             os.mkdir(item_destination_path)
             backup_dir(full_backup, item_path, item_destination_path, records, use_md5)
             if not full_backup and len(os.listdir(item_destination_path)) == 0: #delete the directory if nothing was backed up
+                logger.debug("Nothing in %s needed to be backed up. Removing source directory" %item_path)
                 os.rmdir(item_destination_path)
         else:
-            print("Checking file " + item_path)
             if use_md5:
+                logger.debug("Checking file %s using MD5" %item_path)
                 compare: str = hashlib.md5(open(item_path, "rb").read()).hexdigest()
             else:
+                logger.debug("Checking file %s using mtime" %item_path)
                 compare: str = str(os.path.getmtime(item_path))
             if full_backup or (item_path not in records.keys() or records[item_path] != compare):
                 if full_backup:
                     records[item_path] = compare
-                print(item_path + " added to backup")
+                    logger.debug("Updated %s in records: %s" %(item_path, compare))
                 copy(item_path, item_destination_path)
+                logger.info("Backed up " + item_path)
     os.chdir(previous_path)
 
 if __name__ == "__main__":
+    init_logger()
+    logger.debug("Program started")
     if(not os.path.exists(conf_path)):
+        logger.debug("Config file at %s does not exist" %conf_path)
         gen_config_file(conf_path)
+        logger.debug("Generated config file at " + conf_path)
         print("config file created at %s. Please edit it before running this program again." %os.path.abspath(conf_path))
+        os.mkdir("logs")
+        write_log()
     else:
         conf: dict = toml.load(conf_path)
         if not verify_conf(conf):
@@ -263,11 +300,14 @@ if __name__ == "__main__":
                 else:
                     exit(0)
         if backup_type == 0:
-            full_backup(conf)
-            conf["current-differential-backups"] = 0
+            logger.info("Started full backup")
             now: datetime = datetime.datetime.now()
+            log_destination = full_backup(conf)
+            conf["current-differential-backups"] = 0
+            logger.debug("Reset current-differential-backups")
             conf["last-full"] = now.strftime("%m/%d/%Y %a %H:%M:%S")
             conf["last-full-timestamp"] = now.timestamp()
+            logger.debug("Updated timestamp of last full backup")
         else:
             if not os.path.exists(records_path):
                 print("Error: record file not found. Has a full backup been run yet?")
@@ -278,3 +318,5 @@ if __name__ == "__main__":
             conf["last-differential"] = now.strftime("%m/%d/%Y %a %H:%M:%S")
             conf["last-differential-timestamp"] = now.timestamp()
         write_toml(conf, conf_path)
+        logger.debug("Wrote conf file at " + conf_path)
+        write_log()
