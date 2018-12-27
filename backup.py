@@ -80,39 +80,39 @@ def verify_conf(conf: dict):
     valid: bool = True
     keys: set = conf.keys()
     if "source-directories" not in keys or not isinstance(conf["source-directories"], list) or len(conf["source-directories"]) == 0:
-        print("Invalid source-directories entry in " + conf_path)
+        logger.critical("Invalid source-directories entry in " + conf_path)
         valid = False
     if "destination" not in keys or len(conf["destination"]) == 0:
-        print("Invalid destination entry in " + conf_path)
+        logger.critical("Invalid destination entry in " + conf_path)
         valid = False
     if "ignored" not in keys or not isinstance(conf["ignored"], list):
-        print("Invalid ignored entry in " + conf_path)
+        logger.critical("Invalid ignored entry in " + conf_path)
         valid = False
     if "differential-backups" not in keys or conf["differential-backups"] < 0:
-        print("Invalid differential-backups entry in " + conf_path)
+        logger.critical("Invalid differential-backups entry in " + conf_path)
         valid = False
     if "current-differential-backups" not in keys or conf["current-differential-backups"] < 0:
-        print("Invalid current-differential-backups entry in " + conf_path)
+        logger.critical("Invalid current-differential-backups entry in " + conf_path)
         valid = False
     if "last-full-timestamp" not in keys:
-        print("Invalid last-full-timestamp entry in " + conf_path)
+        logger.critical("Invalid last-full-timestamp entry in " + conf_path)
         valid = False
     if "last-differential-timestamp" not in keys:
-        print("Invalid last-differential-timestamp entry in " + conf_path)
+        logger.critical("Invalid last-differential-timestamp entry in " + conf_path)
         valid = False
     if "use-md5" not in keys:
-        print("use-md5 key missing from config")
+        logger.critical("use-md5 key missing from config")
         valid = False
     else:
         if os.path.exists(records_path):
             records: dict = toml.load(records_path)
             if conf["use-md5"]:
                 if not bool(re.search("[A-z]", records[list(records.keys())[0]])):
-                    print("config says to use MD5, but record file is storing mtime")
+                    logger.critical("config says to use MD5, but record file is storing mtime")
                     valid = False
             else:
                 if bool(re.search("[A-z]", records[list(records.keys())[0]])):
-                    print("config says to use mtime, but record file is storing MD5")
+                    logger.critical("config says to use mtime, but record file is storing MD5")
                     valid = False
     return valid
 
@@ -174,11 +174,11 @@ def full_backup(conf: dict):
     except FileExistsError:
         logger.warning("Destination path already exists")
         if confirm("The destination folder already exists at %s. Remove?" %destination_path, False, True): 
-            logger.info("User chose to remove the existing directory at destination path, continuing")
+            logger.debug("User chose to remove the existing directory at destination path")
             rmtree(destination_path)
             os.mkdir(destination_path)
         else:
-            logger.critical("User chose to leave the existing directory. Program cannot continue")
+            logger.critical("User chose to leave the existing directory")
             write_log()
             exit(1)
     for path in conf["source-directories"]:
@@ -208,32 +208,39 @@ def differential_backup(conf: dict):
     working_dir: str = os.path.abspath(os.curdir)
     now: str = datetime.datetime.now().strftime("%m-%d-%Y_%a_%H-%M-%S")
     records: dict = toml.load(records_path)
+    logger.debug("Loaded records file at " + records_path)
     destination_path: str = conf["destination"] + "_Differential_" + now
     try:
+        logger.info("Creating destination path at " + destination_path)
         os.mkdir(destination_path)
     except FileExistsError:
         if confirm("The destination folder already exists at %s. Remove?" %destination_path, False, True): 
+            logger.debug("User chose to remove the existing directory at destination path")
             rmtree(destination_path)
             os.mkdir(destination_path)
         else:
+            logger.critical("User chose to leave the existing directory")
             exit(1)
     for path in conf["source-directories"]:
+        logger.info("Creating destination directory for " + path)
         os.mkdir(destination_path + "/" + item_from_path(path))
+        logger.info("Destination created. Backing up " + path)
         backup_dir(False, path, destination_path + "/" + item_from_path(path), records, conf["use-md5"])
     os.chdir(destination_path)
     try:
-        print("Finished copying files. Archiving...")
+        logger.info("Finished copying source directories. Archiving")
         make_archive("Differential_" + now, "zip", destination_path)
     except ValueError as e:
-        print("An error occured during creation of the archive. This may be okay, however.")
-        print(str(e))
-    print("Finished archiving. Removing working files...")
+        logger.error("Error occured during creation of archive: " + str(e))
+    logger.info("Archive created. Removing working files")
     for file in os.listdir(destination_path):
         if os.path.isdir(file):
+            logger.debug("Removing " + file)
             rmtree(destination_path + "/" + file)
     with ZipFile("Differential_" + now + ".zip") as z:
-        print("Differential backup completed. Backed up %d items with a compressed size of %s." %(len(z.infolist()), item_size(destination_path + "/Differential_" + now + ".zip")))
+        logger.info("Differential backup completed. Backed up %d items with a compressed size of %s." %(len(z.infolist()), item_size(destination_path + "/Differential_" + now + ".zip")))
     os.chdir(working_dir)
+    return "%s/%s.log" %(destination_path, now)
     
 def backup_dir(full_backup: bool, path: str, destination: str, records: dict, use_md5: bool):
     previous_path: str = os.path.abspath(os.curdir)
@@ -310,9 +317,9 @@ if __name__ == "__main__":
             logger.debug("Updated timestamp of last full backup")
         else:
             if not os.path.exists(records_path):
-                print("Error: record file not found. Has a full backup been run yet?")
+                logger.critical("Record file not found; has a full backup been run yet?")
                 exit(1)
-            differential_backup(conf)
+            log_destination = differential_backup(conf)
             conf["current-differential-backups"] += 1
             now: datetime = datetime.datetime.now()
             conf["last-differential"] = now.strftime("%m/%d/%Y %a %H:%M:%S")
