@@ -23,7 +23,7 @@ def init_logger():
     console.setLevel(logging.INFO)
     console.setFormatter(logging.Formatter("%(message)s"))
     file = logging.FileHandler(tmp_log_path)
-    file.setLevel(logging.DEBUG)
+    file.setLevel(logging.INFO)
     file.setFormatter(logging.Formatter("[%(asctime)s %(levelname)s] %(message)s"))
     logging.basicConfig(handlers=[console, file])
     global logger
@@ -123,11 +123,11 @@ def write_toml(conf: dict, path: str):
 
 def confirm(question: str, default_yes: bool=True, default_no: bool=False):
     if default_yes:
-        response: str = input(question + " (Y/n)")
+        response: str = input(question + " (Y/n) ")
     elif default_no:
-        response: str = input(question + " (y/N)")
+        response: str = input(question + " (y/N) ")
     else:
-        response: str = input(question + " (y/n)")
+        response: str = input(question + " (y/n) ")
     if response == "":
         if default_yes:
             return True
