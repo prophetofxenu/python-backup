@@ -226,7 +226,6 @@ def full_backup(conf: dict, compress=True):
     os.chdir(working_dir)
     write_toml(records, records_path)
     logger.debug("Record file written to " + records_path)
-    # return "%s/%s.log" %(destination_path, now)
     backup_record["log_path"]: str = "%s/%s.log" %(destination_path, now)
     
     return backup_record
@@ -237,6 +236,12 @@ def differential_backup(conf: dict):
     records: dict = toml.load(records_path)
     logger.debug("Loaded records file at " + records_path)
     destination_path: str = conf["destination"] + "_Differential_" + now
+
+    backup_record: dict = {}
+    backup_record["total_filesize"]: int = 0
+    backup_record["total_files"]: int = 0
+    backup_record["total_directories"]: int = 0
+
     try:
         logger.info("Creating destination path at " + destination_path)
         os.mkdir(destination_path)
@@ -248,35 +253,45 @@ def differential_backup(conf: dict):
         else:
             logger.critical("User chose to leave the existing directory")
             exit(1)
+
     for path in conf["source-directories"]:
         logger.info("Creating destination directory for " + path)
         os.mkdir(destination_path + "/" + item_from_path(path))
-        logger.info("Destination created. Backing up " + path)
-        backup_dir(False, path, destination_path + "/" + item_from_path(path), records, conf["use-md5"])
+        logger.debug("Destination created. Backing up " + path)
+        dir_record: dict = backup_dir(False, path, destination_path + "/" + item_from_path(path), records, conf["use-md5"])
+
+        backup_record["total_filesize"] += dir_record["total_filesize"]
+        backup_record["total_files"] += dir_record["total_files"]
+        backup_record["total_directories"] += dir_record["total_directories"]
+
     os.chdir(destination_path)
     try:
         logger.info("Finished copying source directories. Archiving")
         make_archive("Differential_" + now, "zip", destination_path)
     except ValueError as e:
         logger.error("Error occured during creation of archive: " + str(e))
+
     logger.info("Archive created. Removing working files")
     for file in os.listdir(destination_path):
         if os.path.isdir(file):
             logger.debug("Removing " + file)
             rmtree(destination_path + "/" + file)
+
     with ZipFile("Differential_" + now + ".zip") as z:
         logger.info("Differential backup completed. Backed up %d items with a compressed size of %s." %(len(z.infolist()), item_size(destination_path + "/Differential_" + now + ".zip")))
     os.chdir(working_dir)
-    return "%s/%s.log" %(destination_path, now)
+
+    backup_record["log_path"]: str = "%s/%s.log" %(destination_path, now)
+    return backup_record
     
 def backup_dir(full_backup: bool, path: str, destination: str, records: dict, use_md5: bool):
     previous_path: str = os.path.abspath(os.curdir)
     os.chdir(path)
 
-    record: dict = {}
-    record["total_filesize"]: int = 0
-    record["total_files"]: int = 0
-    record["total_directories"]: int = 0
+    backup_record: dict = {}
+    backup_record["total_filesize"]: int = 0
+    backup_record["total_files"]: int = 0
+    backup_record["total_directories"]: int = 0
 
     for item in os.listdir():
         if is_ignored(conf, item):
@@ -296,9 +311,9 @@ def backup_dir(full_backup: bool, path: str, destination: str, records: dict, us
                 logger.debug("Nothing in %s needed to be backed up. Removing source directory" %item_path)
                 os.rmdir(item_destination_path)
             else:
-                record["total_filesize"] += prev["total_filesize"]
-                record["total_files"] += prev["total-files"]
-                record["total_directories"] += prev["total_directories"] + 1
+                backup_record["total_filesize"] += prev["total_filesize"]
+                backup_record["total_files"] += prev["total-files"]
+                backup_record["total_directories"] += prev["total_directories"] + 1
 
         else:
             if use_md5:
@@ -315,11 +330,11 @@ def backup_dir(full_backup: bool, path: str, destination: str, records: dict, us
                 copy(item_path, item_destination_path)
                 logger.info("Backed up " + item_path)
 
-                record["total_files"] += 1
-                record["total_filesize"] += os.stat(item_path).st_size
+                backup_record["total_files"] += 1
+                backup_record["total_filesize"] += os.stat(item_path).st_size
 
     os.chdir(previous_path)
-    return record
+    return backup_record
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -397,12 +412,17 @@ if __name__ == "__main__":
             if not os.path.exists(records_path):
                 logger.critical("Record file not found; has a full backup been run yet?")
                 exit(1)
-            log_destination = differential_backup(conf)
+
+            backup_record: dict = differential_backup(conf)
+            log_destination = backup_record["log_path"]
+
             if not args.no_increment:
                 conf["current-differential-backups"] += 1
+
             now: datetime = datetime.datetime.now()
             conf["last-differential"] = now.strftime("%m/%d/%Y %a %H:%M:%S")
             conf["last-differential-timestamp"] = now.timestamp()
+
         write_toml(conf, conf_path)
         logger.debug("Wrote conf file at " + conf_path)
         write_log()
