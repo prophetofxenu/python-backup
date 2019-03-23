@@ -1,6 +1,6 @@
 #TODO remove old backups
-#TODO add commandline arguments
 
+from argparse import ArgumentParser
 import datetime
 import hashlib
 import logging
@@ -22,10 +22,13 @@ def init_logger():
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(logging.INFO)
     console.setFormatter(logging.Formatter("%(message)s"))
+
     file = logging.FileHandler(tmp_log_path)
     file.setLevel(logging.INFO)
     file.setFormatter(logging.Formatter("[%(asctime)s %(levelname)s] %(message)s"))
+
     logging.basicConfig(handlers=[console, file])
+
     global logger
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
@@ -37,6 +40,7 @@ def write_log():
 def gen_config_file(path: str):
     if os.path.exists(path):
         return
+
     conf_file: str = """# This is the config file for backup.py
 # Formatting is TOML: https://github.com/toml-lang/toml
 
@@ -72,13 +76,16 @@ last-full-timestamp = 0.0
 # The date of the last differential backup. Only the timestamp is actually used by the program
 last-differential = "never"
 last-differential-timestamp = 0.0"""
+
     with open(path, "w") as f:
         f.write(conf_file)
+
     return toml.loads(conf_file)
 
 def verify_conf(conf: dict):
     valid: bool = True
     keys: set = conf.keys()
+
     if "source-directories" not in keys or not isinstance(conf["source-directories"], list) or len(conf["source-directories"]) == 0:
         logger.critical("Invalid source-directories entry in " + conf_path)
         valid = False
@@ -114,6 +121,7 @@ def verify_conf(conf: dict):
                 if bool(re.search("[A-z]", records[list(records.keys())[0]])):
                     logger.critical("config says to use mtime, but record file is storing MD5")
                     valid = False
+                    
     return valid
 
 def write_toml(conf: dict, path: str):
@@ -133,11 +141,13 @@ def confirm(question: str, default_yes: bool=True, default_no: bool=False):
             return True
         if default_no:
             return False
+
     response = response.lower()
     if response == "y":
         return True
     if response == "n":
         return False
+
     print("Invalid response")
     return confirm(question, default_yes, default_no)
 
@@ -163,11 +173,17 @@ def is_ignored(conf: dict, item: str):
             return True
     return False
 
-def full_backup(conf: dict):
+def full_backup(conf: dict, compress=True):
     working_dir: str = os.path.abspath(os.curdir)
     now: str = datetime.datetime.now().strftime("%m-%d-%Y_%a_%H-%M-%S")
     records: dict = {}
     destination_path: str = conf["destination"] + "_Full_" + now
+
+    backup_record: dict = {}
+    backup_record["total_filesize"]: int = 0
+    backup_record["total_files"]: int = 0
+    backup_record["total_directories"]: int = 0
+
     try:
         logger.info("Creating destination path at " + destination_path)
         os.mkdir(destination_path)
@@ -184,25 +200,36 @@ def full_backup(conf: dict):
     for path in conf["source-directories"]:
         logger.info("Creating destination directory for " + path)
         os.mkdir(destination_path + "/" + item_from_path(path))
+
         logger.info("Destination created. Backing up " + path)
-        backup_dir(True, path, destination_path + "/" + item_from_path(path), records, conf["use-md5"])
+        dir_record: dict = backup_dir(True, path, destination_path + "/" + item_from_path(path), records, conf["use-md5"])
+
+        backup_record["total_filesize"] += dir_record["total_filesize"]
+        backup_record["total_files"] += dir_record["total_files"]
+        backup_record["total_directories"] += dir_record["total_directories"]
+    
     os.chdir(destination_path)
-    try:
-        logger.info("Finished copying source directories. Archiving")
-        make_archive("Full_" + now, "zip", destination_path)
-    except ValueError as e:
-        logger.error("Error occured during creation of archive: " + str(e))
-    logger.info("Archive created. Removing working files")
-    for file in os.listdir(destination_path):
-        if os.path.isdir(file):
-            logger.debug("Removing " + file)
-            rmtree(destination_path + "/" + file)
-    with ZipFile("Full_" + now + ".zip") as z:
-        logger.info("Full backup completed. Backed up %d items with a compressed size of %s" %(len(z.infolist()), item_size(destination_path + "/Full_" + now + ".zip")))
+    if compress:
+        try:
+            logger.info("Finished copying source directories. Archiving")
+            make_archive("Full_" + now, "zip", destination_path)
+        except ValueError as e:
+            logger.error("Error occured during creation of archive: " + str(e))
+        logger.info("Archive created. Removing working files")
+        for file in os.listdir(destination_path):
+            if os.path.isdir(file):
+                logger.debug("Removing " + file)
+                rmtree(destination_path + "/" + file)
+        with ZipFile("Full_" + now + ".zip") as z:
+            logger.info("Full backup completed. Backed up %d items with a compressed size of %s" %(len(z.infolist()) - 2, item_size(destination_path + "/Full_" + now + ".zip")))
+
     os.chdir(working_dir)
     write_toml(records, records_path)
     logger.debug("Record file written to " + records_path)
-    return "%s/%s.log" %(destination_path, now)
+    # return "%s/%s.log" %(destination_path, now)
+    backup_record["log_path"]: str = "%s/%s.log" %(destination_path, now)
+    
+    return backup_record
 
 def differential_backup(conf: dict):
     working_dir: str = os.path.abspath(os.curdir)
@@ -245,20 +272,34 @@ def differential_backup(conf: dict):
 def backup_dir(full_backup: bool, path: str, destination: str, records: dict, use_md5: bool):
     previous_path: str = os.path.abspath(os.curdir)
     os.chdir(path)
+
+    record: dict = {}
+    record["total_filesize"]: int = 0
+    record["total_files"]: int = 0
+    record["total_directories"]: int = 0
+
     for item in os.listdir():
-        logger.debug("Backing up item " + item)
         if is_ignored(conf, item):
             logger.info("Skipping item " + item)
             continue
+
+        logger.debug("Backing up item " + item)
+
         item_path: str = os.path.abspath(path + "/" + item)
         item_destination_path: str = os.path.abspath(destination + "/" + item)
         if os.path.isdir(item_path):
             logger.debug(item + " is a directory, descending")
             os.mkdir(item_destination_path)
-            backup_dir(full_backup, item_path, item_destination_path, records, use_md5)
+            prev: dict = backup_dir(full_backup, item_path, item_destination_path, records, use_md5)
+
             if not full_backup and len(os.listdir(item_destination_path)) == 0: #delete the directory if nothing was backed up
                 logger.debug("Nothing in %s needed to be backed up. Removing source directory" %item_path)
                 os.rmdir(item_destination_path)
+            else:
+                record["total_filesize"] += prev["total_filesize"]
+                record["total_files"] += prev["total-files"]
+                record["total_directories"] += prev["total_directories"] + 1
+
         else:
             if use_md5:
                 logger.debug("Checking file %s using MD5" %item_path)
@@ -270,11 +311,35 @@ def backup_dir(full_backup: bool, path: str, destination: str, records: dict, us
                 if full_backup:
                     records[item_path] = compare
                     logger.debug("Updated %s in records: %s" %(item_path, compare))
+
                 copy(item_path, item_destination_path)
                 logger.info("Backed up " + item_path)
+
+                record["total_files"] += 1
+                record["total_filesize"] += os.stat(item_path).st_size
+
     os.chdir(previous_path)
+    return record
 
 if __name__ == "__main__":
+    parser = ArgumentParser()
+    
+    # flags
+    parser.add_argument('-f', '--full', help='Run a full backup', action='store_true')
+    parser.add_argument('-d', '--differential', help='Run a differential backup', action='store_true')
+    parser.add_argument('--no-increment', help='Don\'t increase the number of differential backups run', action='store_true')
+    parser.add_argument('--reset-increments', help='Reset the number of differential backups run to zero and exit', action='store_true')
+    parser.add_argument('--no-compress', help='Don\'t zip the backup', action='store_true')
+    parser.add_argument('-s', '--stats', help='Print statistics and exit', action='store_true')
+
+    # optional args
+    parser.add_argument('-config-path', help='Custom path to config file', type=str)
+    parser.add_argument('-log-path', help='Custom path to create log file at', type=str)
+    parser.add_argument('-records-path', help='Custom path to read/write records file', type=str)
+    parser.add_argument('-stats-path', help='Custom path to read/write stats file', type=str)
+
+    args = parser.parse_args()
+
     init_logger()
     logger.debug("Program started")
     if(not os.path.exists(conf_path)):
@@ -288,39 +353,53 @@ if __name__ == "__main__":
         conf: dict = toml.load(conf_path)
         if not verify_conf(conf):
             exit(1)
+
+        if args.reset_increments:
+            conf["current-differential-backups"] = 0
+            logger.info("Reset current differential backups to zero")
+            os.remove(tmp_log_path)
+            exit(0)
+
         if conf["last-full-timestamp"] == 0.0 or conf["current-differential-backups"] >= conf["differential-backups"]:
             backup_type: int = 0
         else:
             backup_type: int = 1
-        if backup_type == 0:
-            response: bool = confirm("The next backup is set to be a full backup. Proceed?")
-            if not response:
-                if confirm("Perform a differential backup instead?", default_yes=False, default_no=True):
-                    backup_type = 1
-                else:
-                    exit(0)
-        else:
-            response: bool = confirm("The next backup is set to be a differential backup. Proceed?")
-            if not response:
-                if confirm("Perform a full backup instead?", default_yes=False, default_no=True):
-                    backup_type = 0
-                else:
-                    exit(0)
-        if backup_type == 0:
+        if not args.full and not args.differential:
+            if backup_type == 0:
+                response: bool = confirm("The next backup is set to be a full backup. Proceed?")
+                if not response:
+                    if confirm("Perform a differential backup instead?", default_yes=False, default_no=True):
+                        backup_type = 1
+                    else:
+                        exit(0)
+            else:
+                response: bool = confirm("The next backup is set to be a differential backup. Proceed?")
+                if not response:
+                    if confirm("Perform a full backup instead?", default_yes=False, default_no=True):
+                        backup_type = 0
+                    else:
+                        exit(0)
+        if (backup_type == 0 and not args.differential) or args.full:
             logger.info("Started full backup")
             now: datetime = datetime.datetime.now()
-            log_destination = full_backup(conf)
+
+            backup_record: dict = full_backup(conf)
+            log_destination = backup_record["log_path"]
+            print(backup_record["total_files"] + backup_record["total_directories"])
+
             conf["current-differential-backups"] = 0
             logger.debug("Reset current-differential-backups")
             conf["last-full"] = now.strftime("%m/%d/%Y %a %H:%M:%S")
             conf["last-full-timestamp"] = now.timestamp()
             logger.debug("Updated timestamp of last full backup")
+
         else:
             if not os.path.exists(records_path):
                 logger.critical("Record file not found; has a full backup been run yet?")
                 exit(1)
             log_destination = differential_backup(conf)
-            conf["current-differential-backups"] += 1
+            if not args.no_increment:
+                conf["current-differential-backups"] += 1
             now: datetime = datetime.datetime.now()
             conf["last-differential"] = now.strftime("%m/%d/%Y %a %H:%M:%S")
             conf["last-differential-timestamp"] = now.timestamp()
