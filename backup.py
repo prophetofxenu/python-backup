@@ -13,6 +13,7 @@ from zipfile import ZipFile
 
 conf_path: str = "./conf.toml"
 records_path: str = "./records.toml"
+stats_path: str = "./stats.toml"
 tmp_log_path: str = "/tmp/python-backup.log"
 
 init_time: str = datetime.datetime.now().strftime("%m-%d-%Y %a %H-%M-%S")
@@ -61,21 +62,7 @@ ignored = [
 differential-backups = 6
 
 # Use MD5 hashing instead of mtime to check if a file has been changed. MD5 is more accurate, but heavily increases the amount of time that the backup takes.
-use-md5 = false
-
-
-# The below entries are for internal use by the program, and should typically not be altered
-
-# The number of differential backups that have been performed since the last full backup
-current-differential-backups = 0
-
-# The date of the last full backup. Only the timestamp is actually used by the program
-last-full = "never"
-last-full-timestamp = 0.0
-
-# The date of the last differential backup. Only the timestamp is actually used by the program
-last-differential = "never"
-last-differential-timestamp = 0.0"""
+use-md5 = false"""
 
     with open(path, "w") as f:
         f.write(conf_file)
@@ -124,10 +111,29 @@ def verify_conf(conf: dict):
                     
     return valid
 
-def write_toml(conf: dict, path: str):
-    output = open(path, "w")
-    toml.dump(conf, output)
-    output.close()
+def gen_stats_file(path: str):
+    stats: dict = {}
+    stats["total_uncompressed_filesize"]: int = 0
+    stats["total_files"]: int = 0
+    stats["total_dirs"]: int = 0
+
+    stats["full_backups"]: int = 0
+    stats["diff_backups"]: int = 0
+
+    stats["last_backup_type"]: int = 2
+    stats["current-differential-backups"]: int = 0
+
+    stats["last-full-timestamp"]: int = 0
+    stats["last-diff-timestamp"]: int = 0
+
+    with open(path, "w") as f:
+        toml.dump(stats, f)
+
+    return stats
+
+def write_toml(d: dict, path: str):
+    with open(path, "w") as f:
+        toml.dump(d, f)
 
 def confirm(question: str, default_yes: bool=True, default_no: bool=False):
     if default_yes:
@@ -372,12 +378,18 @@ if __name__ == "__main__":
         gen_config_file(conf_path)
         logger.debug("Generated config file at " + conf_path)
         print("config file created at %s. Please edit it before running this program again." %os.path.abspath(conf_path))
-        os.mkdir("logs")
+        if not os.path.exists(tmp_log_path):
+            os.mkdir("logs")
         write_log()
     else:
         conf: dict = toml.load(conf_path)
         if not verify_conf(conf):
             exit(1)
+
+        if not os.path.exists(stats_path):
+            stats: dict = gen_stats_file(stats_path)
+        else:
+            stats: dict = toml.load(stats_path)
 
         if args.reset_increments:
             conf["current-differential-backups"] = 0
@@ -386,7 +398,7 @@ if __name__ == "__main__":
             os.remove(tmp_log_path)
             exit(0)
 
-        if conf["last-full-timestamp"] == 0.0 or conf["current-differential-backups"] >= conf["differential-backups"]:
+        if stats["last-full-timestamp"] == 0 or stats["current-differential-backups"] >= conf["differential-backups"]:
             backup_type: int = 0
         else:
             backup_type: int = 1
@@ -417,8 +429,8 @@ if __name__ == "__main__":
 
             conf["current-differential-backups"] = 0
             logger.debug("Reset current-differential-backups")
-            conf["last-full"] = now.strftime("%m/%d/%Y %a %H:%M:%S")
-            conf["last-full-timestamp"] = now.timestamp()
+            # conf["last-full"] = now.strftime("%m/%d/%Y %a %H:%M:%S")
+            stats["last-full-timestamp"] = now.timestamp()
             logger.debug("Updated timestamp of last full backup")
 
         else:
@@ -430,12 +442,14 @@ if __name__ == "__main__":
             log_destination = backup_record["log_path"]
 
             if not args.no_increment:
-                conf["current-differential-backups"] += 1
+                stats["current-differential-backups"] += 1
 
             now: datetime = datetime.datetime.now()
-            conf["last-differential"] = now.strftime("%m/%d/%Y %a %H:%M:%S")
-            conf["last-differential-timestamp"] = now.timestamp()
+            # conf["last-differential"] = now.strftime("%m/%d/%Y %a %H:%M:%S")
+            stats["last-differential-timestamp"] = now.timestamp()
 
         write_toml(conf, conf_path)
         logger.debug("Wrote conf file at " + conf_path)
+        write_toml(stats, stats_path)
+        logger.debug("Wrote stats file at " + stats_path)
         write_log()
