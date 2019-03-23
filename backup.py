@@ -85,15 +85,15 @@ def verify_conf(conf: dict):
     if "differential-backups" not in keys or conf["differential-backups"] < 0:
         logger.critical("Invalid differential-backups entry in " + conf_path)
         valid = False
-    if "current-differential-backups" not in keys or conf["current-differential-backups"] < 0:
-        logger.critical("Invalid current-differential-backups entry in " + conf_path)
-        valid = False
-    if "last-full-timestamp" not in keys:
-        logger.critical("Invalid last-full-timestamp entry in " + conf_path)
-        valid = False
-    if "last-differential-timestamp" not in keys:
-        logger.critical("Invalid last-differential-timestamp entry in " + conf_path)
-        valid = False
+    # if "current-differential-backups" not in keys or conf["current-differential-backups"] < 0:
+    #     logger.critical("Invalid current-differential-backups entry in " + conf_path)
+    #     valid = False
+    # if "last-full-timestamp" not in keys:
+    #     logger.critical("Invalid last-full-timestamp entry in " + conf_path)
+    #     valid = False
+    # if "last-differential-timestamp" not in keys:
+    #     logger.critical("Invalid last-differential-timestamp entry in " + conf_path)
+    #     valid = False
     if "use-md5" not in keys:
         logger.critical("use-md5 key missing from config")
         valid = False
@@ -130,6 +130,33 @@ def gen_stats_file(path: str):
         toml.dump(stats, f)
 
     return stats
+
+def print_stats(stats: dict, conf: dict):
+    print("backup.py statistics\n")
+    
+    print("Total Size of Uncompressed Files: " + hr_size(stats["total_uncompressed_filesize"]))
+    print("Total Files Backedup: " + str(stats["total_files"]))
+    print("Total Directories Backedup: " + str(stats["total_dirs"]))
+    print("Total Items Backedup: " + str(stats["total_files"] + stats["total_dirs"]) + "\n")
+
+    print("Total Full Backups: " + str(stats["full_backups"]))
+    print("Total Differential Backups: " + str(stats["diff_backups"]))
+    print("Total Backups: " + str(stats["full_backups"] + stats["diff_backups"]) + "\n")
+
+    backup_type: int = stats["last_backup_type"]
+    if backup_type == 0:
+        print("Last Backup Type: Full")
+    elif backup_type == 1:
+        print("Last Backup Type: Differential")
+    else:
+        print("No backup has been run yet")
+    
+    print("Diff backups left before next Full backup: " + str(conf["differential-backups"] - stats["current-differential-backups"]))
+
+    last_full: str = datetime.datetime.fromtimestamp(stats["last-full-timestamp"]).strftime("%m/%d/%Y %a %H:%M:%S")
+    last_diff: str = datetime.datetime.fromtimestamp(stats["last-diff-timestamp"]).strftime("%m/%d/%Y %a %H:%M:%S")
+    print("Last Full Backup: " + last_full)
+    print("Last Diff Backup: " + last_diff)
 
 def write_toml(d: dict, path: str):
     with open(path, "w") as f:
@@ -398,6 +425,10 @@ if __name__ == "__main__":
             os.remove(tmp_log_path)
             exit(0)
 
+        if args.stats:
+            print_stats(stats, conf)
+            exit(0)
+
         if stats["last-full-timestamp"] == 0 or stats["current-differential-backups"] >= conf["differential-backups"]:
             backup_type: int = 0
         else:
@@ -421,17 +452,24 @@ if __name__ == "__main__":
 
         if (backup_type == 0 and not args.differential) or args.full:
             logger.info("Started full backup")
-            now: datetime = datetime.datetime.now()
 
             backup_record: dict = full_backup(conf, compress=not args.no_compress)
             log_destination = backup_record["log_path"]
-            print(backup_record["total_files"] + backup_record["total_directories"])
+
+            now: datetime = datetime.datetime.now()
 
             conf["current-differential-backups"] = 0
             logger.debug("Reset current-differential-backups")
-            # conf["last-full"] = now.strftime("%m/%d/%Y %a %H:%M:%S")
+
+            stats["total_uncompressed_filesize"] += backup_record["total_filesize"]
+            stats["total_files"] += backup_record["total_files"]
+            stats["total_dirs"] += backup_record["total_directories"]
+
+            stats["last_backup_type"] = 0
+            stats["full_backups"] += 1
             stats["last-full-timestamp"] = now.timestamp()
-            logger.debug("Updated timestamp of last full backup")
+
+            logger.debug("Updated stats")
 
         else:
             if not os.path.exists(records_path):
@@ -445,11 +483,16 @@ if __name__ == "__main__":
                 stats["current-differential-backups"] += 1
 
             now: datetime = datetime.datetime.now()
-            # conf["last-differential"] = now.strftime("%m/%d/%Y %a %H:%M:%S")
-            stats["last-differential-timestamp"] = now.timestamp()
 
-        write_toml(conf, conf_path)
-        logger.debug("Wrote conf file at " + conf_path)
+            stats["total_uncompressed_filesize"] += backup_record["total_filesize"]
+            stats["total_files"] += backup_record["total_files"]
+            stats["total_dirs"] += backup_record["total_directories"]
+
+            stats["last_backup-type"] = 1
+            stats["diff_backups"] += 1
+            stats["current-differential-backups"]
+            stats["last-diff-timestamp"] = now.timestamp()
+
         write_toml(stats, stats_path)
         logger.debug("Wrote stats file at " + stats_path)
         write_log()
