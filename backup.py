@@ -458,7 +458,7 @@ if __name__ == "__main__":
 
             now: datetime = datetime.datetime.now()
 
-            conf["current-differential-backups"] = 0
+            stats["current-differential-backups"] = 0
             logger.debug("Reset current-differential-backups")
 
             stats["total_uncompressed_filesize"] += backup_record["total_filesize"]
