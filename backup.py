@@ -11,13 +11,17 @@ import sys
 import toml
 from zipfile import ZipFile
 
+conf = None
+logger = None
+
 conf_path: str = "./conf.toml"
 records_path: str = "./records.toml"
 stats_path: str = "./stats.toml"
 tmp_log_path: str = "/tmp/python-backup.log"
 
-init_time: str = datetime.datetime.now().strftime("%m-%d-%Y %a %H-%M-%S")
-log_destination: str = "./logs/" + init_time + ".log"
+init_time: str = datetime.datetime.now().strftime("%m-%d-%Y_%a_%H-%M-%S")
+log_dir: str = "./logs/"
+log_destination: str = log_dir + init_time + ".log"
 
 def init_logger():
     console = logging.StreamHandler(sys.stdout)
@@ -79,21 +83,14 @@ def verify_conf(conf: dict):
     if "destination" not in keys or len(conf["destination"]) == 0:
         logger.critical("Invalid destination entry in " + conf_path)
         valid = False
+    elif conf["destination"][-1] != "/":
+        conf["destination"] += "/"
     if "ignored" not in keys or not isinstance(conf["ignored"], list):
         logger.critical("Invalid ignored entry in " + conf_path)
         valid = False
     if "differential-backups" not in keys or conf["differential-backups"] < 0:
         logger.critical("Invalid differential-backups entry in " + conf_path)
         valid = False
-    # if "current-differential-backups" not in keys or conf["current-differential-backups"] < 0:
-    #     logger.critical("Invalid current-differential-backups entry in " + conf_path)
-    #     valid = False
-    # if "last-full-timestamp" not in keys:
-    #     logger.critical("Invalid last-full-timestamp entry in " + conf_path)
-    #     valid = False
-    # if "last-differential-timestamp" not in keys:
-    #     logger.critical("Invalid last-differential-timestamp entry in " + conf_path)
-    #     valid = False
     if "use-md5" not in keys:
         logger.critical("use-md5 key missing from config")
         valid = False
@@ -213,7 +210,7 @@ def full_backup(conf: dict, compress=True):
     working_dir: str = os.path.abspath(os.curdir)
     now: str = datetime.datetime.now().strftime("%m-%d-%Y_%a_%H-%M-%S")
     records: dict = {}
-    destination_path: str = conf["destination"] + "_Full_" + now
+    destination_path: str = conf["destination"] + "Full_" + now
 
     backup_record: dict = {}
     backup_record["total_filesize"]: int = 0
@@ -222,20 +219,20 @@ def full_backup(conf: dict, compress=True):
 
     try:
         logger.info("Creating destination path at " + destination_path)
-        os.mkdir(destination_path)
+        os.makedirs(destination_path)
     except FileExistsError:
         logger.warning("Destination path already exists")
         if confirm("The destination folder already exists at %s. Remove?" %destination_path, False, True): 
             logger.debug("User chose to remove the existing directory at destination path")
             rmtree(destination_path)
-            os.mkdir(destination_path)
+            os.makedirs(destination_path)
         else:
             logger.critical("User chose to leave the existing directory")
             write_log()
             exit(1)
     for path in conf["source-directories"]:
         logger.info("Creating destination directory for " + path)
-        os.mkdir(destination_path + "/" + item_from_path(path))
+        os.makedirs(destination_path + "/" + item_from_path(path))
 
         logger.info("Destination created. Backing up " + path)
         dir_record: dict = backup_dir(True, path, destination_path + "/" + item_from_path(path), records, conf["use-md5"])
@@ -274,7 +271,7 @@ def differential_backup(conf: dict, compress=True):
     now: str = datetime.datetime.now().strftime("%m-%d-%Y_%a_%H-%M-%S")
     records: dict = toml.load(records_path)
     logger.debug("Loaded records file at " + records_path)
-    destination_path: str = conf["destination"] + "_Differential_" + now
+    destination_path: str = conf["destination"] + "Differential_" + now
 
     backup_record: dict = {}
     backup_record["total_filesize"]: int = 0
@@ -283,19 +280,19 @@ def differential_backup(conf: dict, compress=True):
 
     try:
         logger.info("Creating destination path at " + destination_path)
-        os.mkdir(destination_path)
+        os.makedirs(destination_path)
     except FileExistsError:
         if confirm("The destination folder already exists at %s. Remove?" %destination_path, False, True): 
             logger.debug("User chose to remove the existing directory at destination path")
             rmtree(destination_path)
-            os.mkdir(destination_path)
+            os.makedirs(destination_path)
         else:
             logger.critical("User chose to leave the existing directory")
             exit(1)
 
     for path in conf["source-directories"]:
         logger.info("Creating destination directory for " + path)
-        os.mkdir(destination_path + "/" + item_from_path(path))
+        os.makedirs(destination_path + "/" + item_from_path(path))
         logger.debug("Destination created. Backing up " + path)
         dir_record: dict = backup_dir(False, path, destination_path + "/" + item_from_path(path), records, conf["use-md5"])
 
@@ -347,7 +344,7 @@ def backup_dir(full_backup: bool, path: str, destination: str, records: dict, us
         item_destination_path: str = os.path.abspath(destination + "/" + item)
         if os.path.isdir(item_path):
             logger.debug(item + " is a directory, descending")
-            os.mkdir(item_destination_path)
+            os.makedirs(item_destination_path)
             prev: dict = backup_dir(full_backup, item_path, item_destination_path, records, use_md5)
 
             if not full_backup and len(os.listdir(item_destination_path)) == 0: #delete the directory if nothing was backed up
@@ -400,13 +397,13 @@ if __name__ == "__main__":
 
     init_logger()
     logger.debug("Program started")
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
     if(not os.path.exists(conf_path)):
         logger.debug("Config file at %s does not exist" %conf_path)
         gen_config_file(conf_path)
         logger.debug("Generated config file at " + conf_path)
         print("config file created at %s. Please edit it before running this program again." %os.path.abspath(conf_path))
-        if not os.path.exists(tmp_log_path):
-            os.mkdir("logs")
         write_log()
     else:
         conf: dict = toml.load(conf_path)
