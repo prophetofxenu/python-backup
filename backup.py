@@ -1,5 +1,3 @@
-#TODO remove old backups
-
 from argparse import ArgumentParser
 import datetime
 import hashlib
@@ -65,6 +63,12 @@ ignored = [
 # Set total number of differential backups to perform before the next full backup
 differential-backups = 6
 
+# Number of full backups to keep
+keep-full-backups = 3
+
+# Number of differential backups to keep
+keep-differential-backups = 7
+
 # Use MD5 hashing instead of mtime to check if a file has been changed. MD5 is more accurate, but heavily increases the amount of time that the backup takes.
 use-md5 = false"""
 
@@ -90,6 +94,12 @@ def verify_conf(conf: dict):
         valid = False
     if "differential-backups" not in keys or conf["differential-backups"] < 0:
         logger.critical("Invalid differential-backups entry in " + conf_path)
+        valid = False
+    if "keep-full-backups" not in keys or conf["keep-full-backups"] < 0:
+        logger.critical("Invalid keep-full-backups entry in " + conf_path)
+        valid = False
+    if "keep-differential-backups" not in keys or conf["keep-differential-backups"] < 0:
+        logger.critical("Invalid keep-differential-backups entry in " + conf_path)
         valid = False
     if "use-md5" not in keys:
         logger.critical("use-md5 key missing from config")
@@ -376,6 +386,58 @@ def backup_dir(full_backup: bool, path: str, destination: str, records: dict, us
     os.chdir(previous_path)
     return backup_record
 
+def insert_old(backup_list: list, item: list):
+    if len(backup_list) == 0:
+        backup_list.append(item)
+        return
+    for i in range(0, len(backup_list)):
+        if backup_list[i][1] > item[1]:
+            for x in range(i, len(backup_list)):
+                tmp = backup_list[x]
+                backup_list[x] = item
+                item = tmp
+            break
+    backup_list.append(item)
+
+def get_old_backups(conf: dict):
+    logger.debug("Finding old backups in destination")
+    fulls: int = 0
+    differentials: int = 0
+    for backup in os.listdir(conf["destination"]):
+        if bool(re.search(r"Differential_(\d{2}-){2}\d{4}_(Mon|Tue|Wed|Thu|Fri|Sat|Sun)_(\d{2}-){2}\d{2}", backup)):
+            differentials += 1
+        elif bool(re.search(r"Full_(\d{2}-){2}\d{4}_(Mon|Tue|Wed|Thu|Fri|Sat|Sun)_(\d{2}-){2}\d{2}", backup)):
+            fulls += 1
+    old_fulls: list = []
+    old_differentials: list = []
+    if fulls - conf["keep-full-backups"] > 0 or differentials - conf["keep-differential-backups"] > 0:
+        logger.debug("Old backups are present that need cleaning")
+        tmp_dt: datetime.datetime = datetime.datetime(2000, 1, 1)
+        for backup in os.listdir(conf["destination"]):
+            if bool(re.search(r"Differential_(\d{2}-){2}\d{4}_(Mon|Tue|Wed|Thu|Fri|Sat|Sun)_(\d{2}-){2}\d{2}", backup)):
+                time_str: str = re.search(r"\d{2}-\d{2}-\d{4}_(Mon|Tue|Wed|Thu|Fri|Sun|Sat)_\d{2}-\d{2}-\d{2}", backup).group(0)
+                if time_str != '':
+                    time: datetime.datetime = tmp_dt.strptime(time_str, "%m-%d-%Y_%a_%H-%M-%S")
+                    insert_old(old_differentials, [backup, time])
+                    logger.debug("Found old backup: " + backup)
+            elif bool(re.search(r"Full_(\d{2}-){2}\d{4}_(Mon|Tue|Wed|Thu|Fri|Sat|Sun)_(\d{2}-){2}\d{2}", backup)):
+                time_str: str = re.search(r"\d{2}-\d{2}-\d{4}_(Mon|Tue|Wed|Thu|Fri|Sun|Sat)_\d{2}-\d{2}-\d{2}", backup).group(0)
+                if time_str != '':
+                    time: datetime.datetime = tmp_dt.strptime(time_str, "%m-%d-%Y_%a_%H-%M-%S")
+                    insert_old(old_fulls, [backup, time])
+                    logger.debug("Found old backup: " + backup)
+        for i in range(0, conf["keep-full-backups"]):
+            if len(old_fulls) > 0:
+                old_fulls.pop()
+            else:
+                break
+        for i in range(0, conf["keep-differential-backups"]):
+            if len(old_differentials) > 0:
+                old_differentials.pop()
+            else:
+                break
+    return old_fulls, old_differentials
+    
 if __name__ == "__main__":
     parser = ArgumentParser()
     
@@ -485,11 +547,25 @@ if __name__ == "__main__":
             stats["total_files"] += backup_record["total_files"]
             stats["total_dirs"] += backup_record["total_directories"]
 
-            stats["last_backup-type"] = 1
+            stats["last_backup_type"] = 1
             stats["diff_backups"] += 1
             stats["current-differential-backups"]
             stats["last-diff-timestamp"] = now.timestamp()
 
+        logger.info("Scanning for old backups")
+        old_fulls, old_differentials = get_old_backups(conf)
+        if len(old_fulls) > 0 or len(old_differentials) > 0:
+            if confirm("There are %d old full backups and %d old differential backups. Clean?" %(len(old_fulls), len(old_differentials))):
+                if len(old_fulls) > 0:
+                    for backup in old_fulls:
+                        rmtree(conf["destination"] + backup[0])
+                        logger.info("Removed old backup: " + backup[0])
+                if len(old_differentials) > 0:
+                    for backup in old_differentials:
+                        rmtree(conf["destination"] + backup[0])
+                        logger.info("Removed old backup: " + backup[0])
+        else:
+            logger.info("No old backups found")
         write_toml(stats, stats_path)
         logger.debug("Wrote stats file at " + stats_path)
         write_log()
