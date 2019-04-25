@@ -355,7 +355,7 @@ def backup_dir(full_backup: bool, path: str, destination: str, records: dict, us
                 os.rmdir(item_destination_path)
             else:
                 backup_record["total_filesize"] += prev["total_filesize"]
-                backup_record["total_files"] += prev["total-files"]
+                backup_record["total_files"] += prev["total_files"]
                 backup_record["total_directories"] += prev["total_directories"] + 1
 
         else:
