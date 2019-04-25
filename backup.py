@@ -1,5 +1,3 @@
-#TODO remove old backups
-
 from argparse import ArgumentParser
 import datetime
 import hashlib
@@ -11,13 +9,17 @@ import sys
 import toml
 from zipfile import ZipFile
 
+conf = None
+logger = None
+
 conf_path: str = "./conf.toml"
 records_path: str = "./records.toml"
 stats_path: str = "./stats.toml"
 tmp_log_path: str = "/tmp/python-backup.log"
 
-init_time: str = datetime.datetime.now().strftime("%m-%d-%Y %a %H-%M-%S")
-log_destination: str = "./logs/" + init_time + ".log"
+init_time: str = datetime.datetime.now().strftime("%m-%d-%Y_%a_%H-%M-%S")
+log_dir: str = "./logs/"
+log_destination: str = log_dir + init_time + ".log"
 
 def init_logger():
     console = logging.StreamHandler(sys.stdout)
@@ -61,6 +63,12 @@ ignored = [
 # Set total number of differential backups to perform before the next full backup
 differential-backups = 6
 
+# Number of full backups to keep
+keep-full-backups = 3
+
+# Number of differential backups to keep
+keep-differential-backups = 7
+
 # Use MD5 hashing instead of mtime to check if a file has been changed. MD5 is more accurate, but heavily increases the amount of time that the backup takes.
 use-md5 = false"""
 
@@ -79,21 +87,20 @@ def verify_conf(conf: dict):
     if "destination" not in keys or len(conf["destination"]) == 0:
         logger.critical("Invalid destination entry in " + conf_path)
         valid = False
+    elif conf["destination"][-1] != "/":
+        conf["destination"] += "/"
     if "ignored" not in keys or not isinstance(conf["ignored"], list):
         logger.critical("Invalid ignored entry in " + conf_path)
         valid = False
     if "differential-backups" not in keys or conf["differential-backups"] < 0:
         logger.critical("Invalid differential-backups entry in " + conf_path)
         valid = False
-    # if "current-differential-backups" not in keys or conf["current-differential-backups"] < 0:
-    #     logger.critical("Invalid current-differential-backups entry in " + conf_path)
-    #     valid = False
-    # if "last-full-timestamp" not in keys:
-    #     logger.critical("Invalid last-full-timestamp entry in " + conf_path)
-    #     valid = False
-    # if "last-differential-timestamp" not in keys:
-    #     logger.critical("Invalid last-differential-timestamp entry in " + conf_path)
-    #     valid = False
+    if "keep-full-backups" not in keys or conf["keep-full-backups"] < 0:
+        logger.critical("Invalid keep-full-backups entry in " + conf_path)
+        valid = False
+    if "keep-differential-backups" not in keys or conf["keep-differential-backups"] < 0:
+        logger.critical("Invalid keep-differential-backups entry in " + conf_path)
+        valid = False
     if "use-md5" not in keys:
         logger.critical("use-md5 key missing from config")
         valid = False
@@ -213,7 +220,7 @@ def full_backup(conf: dict, compress=True):
     working_dir: str = os.path.abspath(os.curdir)
     now: str = datetime.datetime.now().strftime("%m-%d-%Y_%a_%H-%M-%S")
     records: dict = {}
-    destination_path: str = conf["destination"] + "_Full_" + now
+    destination_path: str = conf["destination"] + "Full_" + now
 
     backup_record: dict = {}
     backup_record["total_filesize"]: int = 0
@@ -222,20 +229,20 @@ def full_backup(conf: dict, compress=True):
 
     try:
         logger.info("Creating destination path at " + destination_path)
-        os.mkdir(destination_path)
+        os.makedirs(destination_path)
     except FileExistsError:
         logger.warning("Destination path already exists")
         if confirm("The destination folder already exists at %s. Remove?" %destination_path, False, True): 
             logger.debug("User chose to remove the existing directory at destination path")
             rmtree(destination_path)
-            os.mkdir(destination_path)
+            os.makedirs(destination_path)
         else:
             logger.critical("User chose to leave the existing directory")
             write_log()
             exit(1)
     for path in conf["source-directories"]:
         logger.info("Creating destination directory for " + path)
-        os.mkdir(destination_path + "/" + item_from_path(path))
+        os.makedirs(destination_path + "/" + item_from_path(path))
 
         logger.info("Destination created. Backing up " + path)
         dir_record: dict = backup_dir(True, path, destination_path + "/" + item_from_path(path), records, conf["use-md5"])
@@ -274,7 +281,7 @@ def differential_backup(conf: dict, compress=True):
     now: str = datetime.datetime.now().strftime("%m-%d-%Y_%a_%H-%M-%S")
     records: dict = toml.load(records_path)
     logger.debug("Loaded records file at " + records_path)
-    destination_path: str = conf["destination"] + "_Differential_" + now
+    destination_path: str = conf["destination"] + "Differential_" + now
 
     backup_record: dict = {}
     backup_record["total_filesize"]: int = 0
@@ -283,19 +290,19 @@ def differential_backup(conf: dict, compress=True):
 
     try:
         logger.info("Creating destination path at " + destination_path)
-        os.mkdir(destination_path)
+        os.makedirs(destination_path)
     except FileExistsError:
         if confirm("The destination folder already exists at %s. Remove?" %destination_path, False, True): 
             logger.debug("User chose to remove the existing directory at destination path")
             rmtree(destination_path)
-            os.mkdir(destination_path)
+            os.makedirs(destination_path)
         else:
             logger.critical("User chose to leave the existing directory")
             exit(1)
 
     for path in conf["source-directories"]:
         logger.info("Creating destination directory for " + path)
-        os.mkdir(destination_path + "/" + item_from_path(path))
+        os.makedirs(destination_path + "/" + item_from_path(path))
         logger.debug("Destination created. Backing up " + path)
         dir_record: dict = backup_dir(False, path, destination_path + "/" + item_from_path(path), records, conf["use-md5"])
 
@@ -347,7 +354,7 @@ def backup_dir(full_backup: bool, path: str, destination: str, records: dict, us
         item_destination_path: str = os.path.abspath(destination + "/" + item)
         if os.path.isdir(item_path):
             logger.debug(item + " is a directory, descending")
-            os.mkdir(item_destination_path)
+            os.makedirs(item_destination_path)
             prev: dict = backup_dir(full_backup, item_path, item_destination_path, records, use_md5)
 
             if not full_backup and len(os.listdir(item_destination_path)) == 0: #delete the directory if nothing was backed up
@@ -379,6 +386,58 @@ def backup_dir(full_backup: bool, path: str, destination: str, records: dict, us
     os.chdir(previous_path)
     return backup_record
 
+def insert_old(backup_list: list, item: list):
+    if len(backup_list) == 0:
+        backup_list.append(item)
+        return
+    for i in range(0, len(backup_list)):
+        if backup_list[i][1] > item[1]:
+            for x in range(i, len(backup_list)):
+                tmp = backup_list[x]
+                backup_list[x] = item
+                item = tmp
+            break
+    backup_list.append(item)
+
+def get_old_backups(conf: dict):
+    logger.debug("Finding old backups in destination")
+    fulls: int = 0
+    differentials: int = 0
+    for backup in os.listdir(conf["destination"]):
+        if bool(re.search(r"Differential_(\d{2}-){2}\d{4}_(Mon|Tue|Wed|Thu|Fri|Sat|Sun)_(\d{2}-){2}\d{2}", backup)):
+            differentials += 1
+        elif bool(re.search(r"Full_(\d{2}-){2}\d{4}_(Mon|Tue|Wed|Thu|Fri|Sat|Sun)_(\d{2}-){2}\d{2}", backup)):
+            fulls += 1
+    old_fulls: list = []
+    old_differentials: list = []
+    if fulls - conf["keep-full-backups"] > 0 or differentials - conf["keep-differential-backups"] > 0:
+        logger.debug("Old backups are present that need cleaning")
+        tmp_dt: datetime.datetime = datetime.datetime(2000, 1, 1)
+        for backup in os.listdir(conf["destination"]):
+            if bool(re.search(r"Differential_(\d{2}-){2}\d{4}_(Mon|Tue|Wed|Thu|Fri|Sat|Sun)_(\d{2}-){2}\d{2}", backup)):
+                time_str: str = re.search(r"\d{2}-\d{2}-\d{4}_(Mon|Tue|Wed|Thu|Fri|Sun|Sat)_\d{2}-\d{2}-\d{2}", backup).group(0)
+                if time_str != '':
+                    time: datetime.datetime = tmp_dt.strptime(time_str, "%m-%d-%Y_%a_%H-%M-%S")
+                    insert_old(old_differentials, [backup, time])
+                    logger.debug("Found old backup: " + backup)
+            elif bool(re.search(r"Full_(\d{2}-){2}\d{4}_(Mon|Tue|Wed|Thu|Fri|Sat|Sun)_(\d{2}-){2}\d{2}", backup)):
+                time_str: str = re.search(r"\d{2}-\d{2}-\d{4}_(Mon|Tue|Wed|Thu|Fri|Sun|Sat)_\d{2}-\d{2}-\d{2}", backup).group(0)
+                if time_str != '':
+                    time: datetime.datetime = tmp_dt.strptime(time_str, "%m-%d-%Y_%a_%H-%M-%S")
+                    insert_old(old_fulls, [backup, time])
+                    logger.debug("Found old backup: " + backup)
+        for i in range(0, conf["keep-full-backups"]):
+            if len(old_fulls) > 0:
+                old_fulls.pop()
+            else:
+                break
+        for i in range(0, conf["keep-differential-backups"]):
+            if len(old_differentials) > 0:
+                old_differentials.pop()
+            else:
+                break
+    return old_fulls, old_differentials
+    
 if __name__ == "__main__":
     parser = ArgumentParser()
     
@@ -400,13 +459,13 @@ if __name__ == "__main__":
 
     init_logger()
     logger.debug("Program started")
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
     if(not os.path.exists(conf_path)):
         logger.debug("Config file at %s does not exist" %conf_path)
         gen_config_file(conf_path)
         logger.debug("Generated config file at " + conf_path)
         print("config file created at %s. Please edit it before running this program again." %os.path.abspath(conf_path))
-        if not os.path.exists(tmp_log_path):
-            os.mkdir("logs")
         write_log()
     else:
         conf: dict = toml.load(conf_path)
@@ -458,7 +517,7 @@ if __name__ == "__main__":
 
             now: datetime = datetime.datetime.now()
 
-            conf["current-differential-backups"] = 0
+            stats["current-differential-backups"] = 0
             logger.debug("Reset current-differential-backups")
 
             stats["total_uncompressed_filesize"] += backup_record["total_filesize"]
@@ -488,11 +547,25 @@ if __name__ == "__main__":
             stats["total_files"] += backup_record["total_files"]
             stats["total_dirs"] += backup_record["total_directories"]
 
-            stats["last_backup-type"] = 1
+            stats["last_backup_type"] = 1
             stats["diff_backups"] += 1
             stats["current-differential-backups"]
             stats["last-diff-timestamp"] = now.timestamp()
 
+        logger.info("Scanning for old backups")
+        old_fulls, old_differentials = get_old_backups(conf)
+        if len(old_fulls) > 0 or len(old_differentials) > 0:
+            if confirm("There are %d old full backups and %d old differential backups. Clean?" %(len(old_fulls), len(old_differentials))):
+                if len(old_fulls) > 0:
+                    for backup in old_fulls:
+                        rmtree(conf["destination"] + backup[0])
+                        logger.info("Removed old backup: " + backup[0])
+                if len(old_differentials) > 0:
+                    for backup in old_differentials:
+                        rmtree(conf["destination"] + backup[0])
+                        logger.info("Removed old backup: " + backup[0])
+        else:
+            logger.info("No old backups found")
         write_toml(stats, stats_path)
         logger.debug("Wrote stats file at " + stats_path)
         write_log()
